@@ -1,0 +1,22 @@
+version: '3.8'
+
+services:
+  debian-systemd:
+    image: debian:12
+    container_name: debian-systemd
+    privileged: true  # Required for systemd to work properly
+    ports:
+      - "8006:8006"  # Expose port 8006
+      - "22:22"      # Expose port 22 (SSH)
+      
+    network_mode: host  # Use the host network
+    volumes:
+      - /dev:/dev  # Mount /dev from the host to the container
+      - /sys:/sys  # Mount /sys for systemd to access system resources
+      - /proc:/proc  # Mount /proc for systemd to read system information
+    environment:
+      - container=docker  # Tells systemd the container is running in a Docker environment
+    command: ["/lib/systemd/systemd"]
+    restart: always
+    tty: true
+    stdin_open: true
