@@ -12,9 +12,9 @@ services:
       - NET_ADMIN
       - ALL
     ports:
-      - 8006:8633
-      - 8008:8006/tcp	
-      - 8008:8006/udp
+      - 6080:6080
+      - 8006:8006/tcp	
+      - 8006:8006/udp
     volumes:
       -  /dev:/dev
     stop_grace_period: 2m
