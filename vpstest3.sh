@@ -13,13 +13,13 @@ fi
 install_packages() {
     case "$OS" in
         ubuntu|debian)
-            apt update && apt install -y curl qemu-utils grub-common ntfs-3g
+            apt update && apt install -y curl qemu-utils grub-common
             ;;
         fedora|rhel|centos|rocky)
-            dnf install -y curl qemu-img grub2 ntfs-3g
+            dnf install -y curl qemu-img grub2
             ;;
         arch|manjaro)
-            pacman -Sy --noconfirm curl qemu-base grub ntfs-3g
+            pacman -Sy --noconfirm curl qemu-base grub
             ;;
         *)
             echo "Unsupported OS: $OS"
@@ -57,6 +57,19 @@ read -p "Enter static IP (or type 'dhcp' for auto-config): " IP
 read -p "Enter Netmask (if using static IP): " NETMASK
 read -p "Enter Gateway (or type 'dhcp' for auto-config): " GATEWAY
 
+# Detect network interface
+IFACE=$(ip route | awk '/default/ {print $5; exit}')
+
+# Configure networking
+if [[ "$IP" == "dhcp" && "$GATEWAY" == "dhcp" ]]; then
+    echo "Using DHCP..."
+    echo -e "[Match]\nName=$IFACE\n[Network]\nDHCP=ipv4\nDNS=1.1.1.1" > /etc/systemd/network/20-dhcp.network
+else
+    echo "Setting static IP..."
+    echo -e "[Match]\nName=$IFACE\n[Network]\nAddress=$IP/$NETMASK\nGateway=$GATEWAY\nDNS=1.1.1.1" > /etc/systemd/network/20-static.network
+fi
+systemctl restart systemd-networkd
+
 # Ask for target disk
 lsblk
 read -p "Enter the disk to install Windows (e.g., /dev/sda): " DISK
@@ -68,39 +81,7 @@ if [[ "$CONFIRM" != "yes" ]]; then
     exit 0
 fi
 
-# Create a Windows startup script
-mkdir -p /mnt/windows
-mount "$DISK" /mnt/windows
-
-cat > /mnt/windows/Windows/System32/SetupIP.bat <<EOF
-@echo off
-echo Configuring network settings...
-
-netsh interface ip set address "Ethernet" static $IP $NETMASK $GATEWAY
-netsh interface ip set dns "Ethernet" static 1.1.1.1
-
-echo Network configuration complete.
-del %~f0
-EOF
-
-# Register the script in Windows Startup
-echo "Adding IP configuration to Windows startup..."
-REG_FILE="/mnt/windows/Windows/System32/SetupIP.reg"
-cat > "$REG_FILE" <<EOF
-Windows Registry Editor Version 5.00
-
-[HKEY_LOCAL_MACHINE\Software\Microsoft\Windows\CurrentVersion\Run]
-"SetupIP"="C:\\Windows\\System32\\SetupIP.bat"
-EOF
-
-# Inject the registry settings
-echo "Injecting startup script into Windows registry..."
-wine regedit "$REG_FILE"
-
-# Unmount Windows disk
-umount /mnt/windows
-
-# Create auto-install script
+# Create auto-install script inside the Windows OS image
 cat > /root/auto-install.sh <<EOF
 #!/bin/bash
 echo "Formatting $DISK..."
@@ -138,17 +119,16 @@ EOF
 
 chmod +x /root/auto-install.sh
 
-# Add auto-install entry to GRUB
-echo "Adding Windows auto-install to GRUB..."
+# Modify GRUB to show the special entry for the extraction process
 cat > /etc/grub.d/40_custom <<EOF
 menuentry "Auto Install Windows" {
     linux /boot/vmlinuz root=/dev/ram0 init=/root/auto-install.sh
 }
 EOF
 
-# Set Windows installation as the next boot
+# Set Windows installation as the next boot (temporary)
 grub-mkconfig -o /boot/grub/grub.cfg
 grub-reboot "Auto Install Windows"
 
-echo "Installation setup complete. Rebooting..."
+echo "Windows extraction setup complete. Rebooting..."
 reboot
