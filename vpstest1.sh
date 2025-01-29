@@ -9,17 +9,17 @@ else
     exit 1
 fi
 
-# Function to install required packages
+# Install required packages
 install_packages() {
     case "$OS" in
         ubuntu|debian)
-            apt update && apt install -y curl qemu-utils grub-common
+            apt update && apt install -y curl qemu-utils grub-common ntfs-3g
             ;;
         fedora|rhel|centos|rocky)
-            dnf install -y curl qemu-img grub2
+            dnf install -y curl qemu-img grub2 ntfs-3g
             ;;
         arch|manjaro)
-            pacman -Sy --noconfirm curl qemu-base grub
+            pacman -Sy --noconfirm curl qemu-base grub ntfs-3g
             ;;
         *)
             echo "Unsupported OS: $OS"
@@ -28,15 +28,14 @@ install_packages() {
     esac
 }
 
-# Ensure required packages are installed
 install_packages
 
-# Prompt for Windows image link
+# Get Windows VHDX download link
 read -p "Enter the direct link to the Windows VHDX file: " VHDX_URL
 FILENAME=$(basename "$VHDX_URL")
 VHDX_PATH="/root/$FILENAME"
 
-# Download the file if not already present
+# Download VHDX
 if [[ -f "$VHDX_PATH" ]]; then
     echo "File already exists: $VHDX_PATH"
 else
@@ -46,92 +45,17 @@ fi
 
 # Handle .gz files
 if [[ "$FILENAME" == *.gz ]]; then
-    echo "Detected gzip-compressed file. Extracting..."
+    echo "Extracting GZ file..."
     GZ_EXTRACTED="/root/$(basename "$FILENAME" .gz)"
     cp "$VHDX_PATH" "$GZ_EXTRACTED"
     gunzip "$GZ_EXTRACTED"
     VHDX_PATH="$GZ_EXTRACTED"
 fi
 
-# Network Configuration
-read -p "Enter static IP (or type 'dhcp' for automatic config): " IP
+# Ask for network configuration
+read -p "Enter static IP (or type 'dhcp' for auto-config): " IP
 read -p "Enter Netmask (if using static IP): " NETMASK
-read -p "Enter Gateway (or type 'dhcp' if using automatic config): " GATEWAY
-
-# Detect network interface
-IFACE=$(ip route | awk '/default/ {print $5; exit}')
-
-# Configure networking
-if [[ "$IP" == "dhcp" && "$GATEWAY" == "dhcp" ]]; then
-    echo "Using DHCP..."
-    case "$OS" in
-        ubuntu|debian)
-            cat > /etc/network/interfaces <<EOF
-auto $IFACE
-iface $IFACE inet dhcp
-dns-nameservers 1.1.1.1
-EOF
-            ;;
-        fedora|rhel|centos|rocky)
-            nmcli con mod $IFACE ipv4.method auto
-            nmcli con mod $IFACE ipv4.dns "1.1.1.1"
-            ;;
-        arch|manjaro)
-            cat > /etc/systemd/network/20-wired.network <<EOF
-[Match]
-Name=$IFACE
-
-[Network]
-DHCP=ipv4
-DNS=1.1.1.1
-EOF
-            systemctl restart systemd-networkd
-            ;;
-    esac
-else
-    echo "Setting static IP..."
-    case "$OS" in
-        ubuntu|debian)
-            cat > /etc/network/interfaces <<EOF
-auto $IFACE
-iface $IFACE inet static
-address $IP
-netmask $NETMASK
-gateway $GATEWAY
-dns-nameservers 1.1.1.1
-EOF
-            ;;
-        fedora|rhel|centos|rocky)
-            nmcli con mod $IFACE ipv4.method manual ipv4.addresses $IP/$NETMASK ipv4.gateway $GATEWAY ipv4.dns "1.1.1.1"
-            ;;
-        arch|manjaro)
-            cat > /etc/systemd/network/20-static.network <<EOF
-[Match]
-Name=$IFACE
-
-[Network]
-Address=$IP/$NETMASK
-Gateway=$GATEWAY
-DNS=1.1.1.1
-EOF
-            systemctl restart systemd-networkd
-            ;;
-    esac
-fi
-
-# Restart networking
-echo "Applying network settings..."
-case "$OS" in
-    ubuntu|debian)
-        systemctl restart networking || service networking restart
-        ;;
-    fedora|rhel|centos|rocky)
-        nmcli con up $IFACE
-        ;;
-    arch|manjaro)
-        systemctl restart systemd-networkd
-        ;;
-esac
+read -p "Enter Gateway (or type 'dhcp' for auto-config): " GATEWAY
 
 # Ask for target disk
 lsblk
@@ -143,6 +67,38 @@ if [[ "$CONFIRM" != "yes" ]]; then
     echo "Installation aborted."
     exit 0
 fi
+
+# Create a Windows startup script
+mkdir -p /mnt/windows
+mount "$DISK" /mnt/windows
+
+cat > /mnt/windows/Windows/System32/SetupIP.bat <<EOF
+@echo off
+echo Configuring network settings...
+
+netsh interface ip set address "Ethernet" static $IP $NETMASK $GATEWAY
+netsh interface ip set dns "Ethernet" static 1.1.1.1
+
+echo Network configuration complete.
+del %~f0
+EOF
+
+# Register the script in Windows Startup
+echo "Adding IP configuration to Windows startup..."
+REG_FILE="/mnt/windows/Windows/System32/SetupIP.reg"
+cat > "$REG_FILE" <<EOF
+Windows Registry Editor Version 5.00
+
+[HKEY_LOCAL_MACHINE\Software\Microsoft\Windows\CurrentVersion\Run]
+"SetupIP"="C:\\Windows\\System32\\SetupIP.bat"
+EOF
+
+# Inject the registry settings
+echo "Injecting startup script into Windows registry..."
+wine regedit "$REG_FILE"
+
+# Unmount Windows disk
+umount /mnt/windows
 
 # Create auto-install script
 cat > /root/auto-install.sh <<EOF
@@ -163,30 +119,18 @@ umount /mnt/windows
 DISK_UUID=\$(blkid -s UUID -o value "$DISK")
 
 echo "Configuring GRUB for Windows..."
-case "$OS" in
-    ubuntu|debian|arch|manjaro)
-        cat > /boot/grub/grub.cfg <<GRUBEOF
-set timeout=1
+cat > /etc/grub.d/40_custom <<GRUBEOF
 menuentry "Windows" {
     insmod ntfs
     search --no-floppy --fs-uuid --set=root \$DISK_UUID
     chainloader +1
 }
 GRUBEOF
-        grub-mkconfig -o /boot/grub/grub.cfg
-        ;;
-    fedora|rhel|centos|rocky)
-        cat > /boot/grub2/grub.cfg <<GRUBEOF
-set timeout=1
-menuentry "Windows" {
-    insmod ntfs
-    search --no-floppy --fs-uuid --set=root \$DISK_UUID
-    chainloader +1
-}
-GRUBEOF
-        grub2-mkconfig -o /boot/grub2/grub.cfg
-        ;;
-esac
+
+grub-mkconfig -o /boot/grub/grub.cfg
+
+echo "Restoring normal boot..."
+grub-set-default 0
 
 echo "Windows installation complete. Rebooting..."
 reboot
@@ -194,26 +138,17 @@ EOF
 
 chmod +x /root/auto-install.sh
 
-# Modify GRUB for auto-install
-echo "Setting up GRUB for installation..."
-case "$OS" in
-    ubuntu|debian|arch|manjaro)
-        cat > /etc/grub.d/40_custom <<EOF
+# Add auto-install entry to GRUB
+echo "Adding Windows auto-install to GRUB..."
+cat > /etc/grub.d/40_custom <<EOF
 menuentry "Auto Install Windows" {
     linux /boot/vmlinuz root=/dev/ram0 init=/root/auto-install.sh
 }
 EOF
-        grub-mkconfig -o /boot/grub/grub.cfg
-        ;;
-    fedora|rhel|centos|rocky)
-        cat > /etc/grub.d/40_custom <<EOF
-menuentry "Auto Install Windows" {
-    linux /boot/vmlinuz root=/dev/ram0 init=/root/auto-install.sh
-}
-EOF
-        grub2-mkconfig -o /boot/grub2/grub.cfg
-        ;;
-esac
+
+# Set Windows installation as the next boot
+grub-mkconfig -o /boot/grub/grub.cfg
+grub-reboot "Auto Install Windows"
 
 echo "Installation setup complete. Rebooting..."
 reboot
