@@ -1,2 +1,2 @@
-.\cpuminer-sse2.exe -a minotaurx -o stratum+tcp://minotaurx.na.mine.zpool.ca:7019 -u RPLSuM7PgYZwk3FfmJ41H5vdWvpWyPyY26 -p c=RVN
-./miner --algo kawpow --server stratum+tcp://kawpow.na.mine.zpool.ca:1325 --userRPLSuM7PgYZwk3FfmJ41H5vdWvpWyPyY26  --pass c=RVN,zap=RVN
+.\cpuminer-sse2.exe -a minotaurx -o stratum+tcp://minotaurx.na.mine.zpool.ca:7019 -u Xse87zWhyZRJ2W3A36UUTTAHBBium6Tq5K -p c=DASH
+./miner --algo kawpow --server stratum+tcp://kawpow.na.mine.zpool.ca:1325 --user Xse87zWhyZRJ2W3A36UUTTAHBBium6Tq5K  --pass c=DASH
